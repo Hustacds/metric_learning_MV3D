@@ -1,5 +1,10 @@
 ## -*- coding: utf-8 -*-
+#exact模型独立，retrieval网络同时解决fuse和match
+#在模型训练的比较好时，即3个数据集分开的模型，训练精度达到100%，在这种情况下，rnn的效果还不如mvcnn，几种方法效果类似
+#pos的识别率 较neg低
 
+#在模型训练的比较差，3个数据集融合，模型的准确率不高，这时候反而是mvrnn的效果好。好的原因是由于添加了网络参数？
+#Pos的识别率较neg高
 
 import numpy as np
 import os
@@ -11,34 +16,169 @@ import torchvision.models as models
 import cv2
 from models.Model import Model
 import torch.optim as optim
+from torchvision import transforms, datasets
 import random
 from torch.utils.data import Dataset,DataLoader,TensorDataset
-from ignite.engine import Engine, Events
-from ignite.handlers import ModelCheckpoint, Timer
-from ignite.metrics import RunningAverage
+
+rootpath = '/home/ds/MVRCNN/FGR3D/'
+
+#lstm的定义
+class FFM(nn.Module):
+    def __init__(self,type,num_view):
+        super(FFM,self).__init__()
+        self.type = type
+        self.num_view = num_view
+        if self.type == 'rnn':
+            self.length_fused_feature = 1024
+        elif self.type == 'maxpooling':
+            self.length_fused_feature = 1024
+        elif self.type == "averaging":
+            self.length_fused_feature = 1024
+        elif self.type == "concatenating":
+            self.length_fused_feature = 512*(num_view+1)
+        elif self.type == "unfused":
+            self.length_fused_feature = 1024
+        elif self.type =='stack':
+            self.length_fused_feature = 1024
+        else:
+            print("================wrong type===================")
+        self.rnn = torch.nn.LSTM(input_size=512, hidden_size=512, num_layers=2, batch_first=True)
+        self.match = torch.nn.Linear(in_features=self.length_fused_feature, out_features=2)
+        self.match_middle1 = torch.nn.Linear(in_features=self.length_fused_feature, out_features=self.length_fused_feature)
+        self.match_middle2 = torch.nn.Linear(in_features=self.length_fused_feature,
+                                             out_features=self.length_fused_feature)
 
 
+        self.match_cnn1 = torch.nn.Conv1d(num_view,10,stride=1,padding = 0,kernel_size=1)
+        self.match_cnn2 = torch.nn.Conv1d(10, 1, stride=1, padding=0, kernel_size=1)
 
+    # x为require feature , dimension = batch_size * feature_length
+    # y为registered features  dimension = batch_size * num_views * feature_length
+    def forward(self,x,y):
 
+        if self.type=='rnn':
+            N, L = x.size()  # N为batch_size, L为特征长度
+            # print('batchsize = {}, 检索特征长度 = {}'.format(N, L))
+            N, M, L = y.size()  # N为batch_size, M为Multi-view数量
+            # print('batchsize = {}, 视图数量为 {}, 检索特征长度 = {}'.format(N, M, L))
+            output = []
+            h0 = Variable(torch.zeros(2, y.size(0), 512).cuda())
+            c0 = Variable(torch.zeros(2, y.size(0), 512).cuda())
+            out,(h_n,c_n) = self.rnn(y, (h0, c0))
+            fused_feature = out[:,-1,:]
+            output.append(fused_feature)
+            input = torch.cat((x, fused_feature), 1)
+            input = self.match_middle1(input)
+            input = torch.tanh(input)
+            input = self.match_middle2(input)
+            input = torch.tanh(input)
+            result = self.match(input) # N * 2
+            output.append(result)
+            return output
 
+        elif self.type =='maxpooling':
+            N, L = x.size()  # N为batch_size, L为特征长度
+            # print('batchsize = {}, 检索特征长度 = {}'.format(N, L))
+            N, M, L = y.size()  # N为batch_size, M为Multi-view数量
+            # print('batchsize = {}, 视图数量为 {}, 检索特征长度 = {}'.format(N, M, L))
+            output = []
+            fused_feature = torch.max(y, 1)[0]
+            output.append(fused_feature)
+            # print(x.shape)
+            # print(fused_feature.shape)
+            input = torch.cat((x, fused_feature),1)
+            # print(input.shape)
+            input = self.match_middle1(input)
+            input = torch.tanh(input)
+            input = self.match_middle2(input)
+            input = torch.tanh(input)
+            result = self.match(input)  # N * 2
+            # print(result.shape)
+            output.append(result)
+            return output
 
+        elif self.type =="averaging":
+            N, L = x.size()  # N为batch_size, L为特征长度
+            # print('batchsize = {}, 检索特征长度 = {}'.format(N, L))
+            N, M, L = y.size()  # N为batch_size, M为Multi-view数量
+            # print('batchsize = {}, 视图数量为 {}, 检索特征长度 = {}'.format(N, M, L))
+            output = []
+            fused_feature = torch.mean(y, 1)
+            output.append(fused_feature)
+            input = torch.cat((x, fused_feature), 1)
+            input = self.match_middle1(input)
+            input = torch.tanh(input)
+            input = self.match_middle2(input)
+            input = torch.tanh(input)
+            result = self.match(input)  # N * 2
+            output.append(result)
+            return output
 
+        elif self.type =="concatenating":
+            N, L = x.size()  # N为batch_size, L为特征长度
+            # print('batchsize = {}, 检索特征长度 = {}'.format(N, L))
+            N, M, L = y.size()  # N为batch_size, M为Multi-view数量
+            # print('batchsize = {}, 视图数量为 {}, 检索特征长度 = {}'.format(N, M, L))
+            output = []
+            fused_feature = y.view(N, M * L)
+            output.append(fused_feature)
+            input = torch.cat((x, fused_feature), 1)
+            input = self.match_middle1(input)
+            input = torch.tanh(input)
+            input = self.match_middle2(input)
+            input = torch.tanh(input)
+            result = self.match(input)
+            output.append(result)
+            return output  # N * 2
 
+        elif self.type=="unfused":
+            N, L = x.size()    #N为batch_size, L为特征长度
+            # print('batchsize = {}, 检索特征长度 = {}'.format(N,L))
+            N, M, L = y.size()  #N为batch_size, M为Multi-view数量
+            # print('batchsize = {}, 视图数量为 {}, 检索特征长度 = {}'.format(N,M, L))
+            output = []
+            output.append(y)
+            result = torch.Tensor(N,M,2).cuda()           # N * M * 2
+            for i in range(M):
+                input = torch.cat((x,y[:,i,:]),1)
+                # print(input.shape)                # N * 2L
+                input = self.match_middle1(input)
+                input = torch.tanh(input)
+                input = self.match_middle2(input)
+                input = torch.tanh(input)
+                result[:,i,:] = self.match(input)
 
+            # print(result.shape)
+            result = torch.mean(result,1)
+            # print(result.shape)
+            output.append(result)
+            return output          # N * 2
 
-
-
-
-
-
-rootpath = 'D:\\GoodsRecognition\\FGR3D\\'
-
-
+        elif self.type == 'stack':
+            N, L = x.size()  # N为batch_size, L为特征长度
+            # print('batchsize = {}, 检索特征长度 = {}'.format(N, L))
+            N, M, L = y.size()  # N为batch_size, M为Multi-view数量
+            # print('batchsize = {}, 视图数量为 {}, 检索特征长度 = {}'.format(N, M, L))
+            output = []
+            fused_feature = self.match_cnn1(y)
+            # print(fused_feature.shape)
+            fused_feature = self.match_cnn2(fused_feature)
+            fused_feature = torch.squeeze(fused_feature,1)
+            # print(fused_feature.shape)
+            output.append(fused_feature)
+            input = torch.cat((x, fused_feature), 1)
+            input = self.match_middle1(input)
+            input = torch.tanh(input)
+            input = self.match_middle2(input)
+            input = torch.tanh(input)
+            result = self.match(input)
+            output.append(result)
+            return output  # N * 2
 
 #加载特征数据
-#
-dataset_settings = ['1','2', '3','123_1', '123_2', '123_3','123_123']
-# dataset_settings = ['123_1', '123_2', '123_3']
+
+# dataset_settings = ['1','2', '3','123_1', '123_2', '123_3','123_123']
+dataset_settings = ['123_1', '123_2', '123_3']
 for dataset_setting in dataset_settings:
 
     fe_train_data = np.load(rootpath + 'dataset/fe_'+dataset_setting+'/fe_train.npz')
@@ -423,53 +563,5 @@ for dataset_setting in dataset_settings:
                                 f3.close()
                                 best_acc = acc
 
-import argparse
-import os
-import sys
-import torch
 
-from torch.backends import cudnn
-sys.path.append('.')
-from config import cfg
 
-from utils.logger import setup_logger
-
-def main():
-    parser = argparse.ArgumentParser(description="ReID Baseline Training")
-    parser.add_argument(
-        "--config_file", default="", help="path to config file", type=str
-    )
-    parser.add_argument("opts", help="Modify config options using the command-line", default=None,
-                        nargs=argparse.REMAINDER)
-
-    args = parser.parse_args()
-
-    num_gpus = int(os.environ["WORLD_SIZE"]) if "WORLD_SIZE" in os.environ else 1
-
-    if args.config_file != "":
-        cfg.merge_from_file(args.config_file)
-    cfg.merge_from_list(args.opts)
-    cfg.freeze()
-
-    output_dir = cfg.OUTPUT_DIR
-    if output_dir and not os.path.exists(output_dir):
-        os.makedirs(output_dir)
-
-    logger = setup_logger("metric_learning_3D", output_dir, 0)
-    logger.info("Using {} GPUS".format(num_gpus))
-    logger.info(args)
-
-    if args.config_file != "":
-        logger.info("Loaded configuration file {}".format(args.config_file))
-        with open(args.config_file, 'r') as cf:
-            config_str = "\n" + cf.read()
-            logger.info(config_str)
-    logger.info("Running with config:\n{}".format(cfg))
-
-    if cfg.MODEL.DEVICE == "cuda":
-        os.environ['CUDA_VISIBLE_DEVICES'] = cfg.MODEL.DEVICE_ID    # new add by gu
-    cudnn.benchmark = True
-    train(cfg)
-
-if __name__ == '__main__':
-    main()
