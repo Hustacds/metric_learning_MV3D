@@ -30,15 +30,21 @@ _C.MODEL.DEVICE = "cuda"
 _C.MODEL.DEVICE_ID = '1'
 # Name of backbone
 
+_C.EXPERIMENT = CN()
+#特征融合方式
+_C.EXPERIMENT.NET_TYPE = ['unfused','rnn','maxpooling', 'averaging', 'concatenating','stack']
+#距离度量方式
+_C.EXPERIMENT.LOSS_TYPE = ['softmax','triplet','softmax_triplet','cosine']
+_C.EXPERIMENT.VIEW_NUM = [2,3,4,5,6,7,8,9,10]
 
 # -----------------------------------------------------------------------------
 # Dataset
 # -----------------------------------------------------------------------------
 _C.DATASETS = CN()
 # List of the dataset names for training, as present in paths_catalog.py
-_C.DATASETS.FEATURE_NAMES = ('fe_1')
+_C.DATASETS.FEATURESET_NAMES = ['fe_1','fe_2','fe_3','fe_123_1','fe_123_2','fe_123_3','fe_123_123']
 # Root directory where datasets should be used (and downloaded if not found)
-_C.DATASETS.ROOT_DIR = ('D:\GoodsRecognition\FGR3D\dataset')
+_C.DATASETS.ROOT_DIR = ('D:\\GoodsRecognition\\FGR3D\\dataset\\')
 
 #define the dataset
 # _C.DATASETS = CN()
@@ -116,7 +122,8 @@ _C.SOLVER.EVAL_PERIOD = 50
 # This is global, so if we have 8 GPUs and IMS_PER_BATCH = 16, each GPU will
 # see 2 images per batch
 _C.SOLVER.IMS_PER_BATCH = 32
-
+_C.SOLVER.OBJS_PER_BATCH = 1000
+_C.SOLVER.SAMPLER_LENGTH = 100
 #loss的组合
 _C.SOLVER.EPOCH_SCHEDULER = []
 _C.SOLVER.LOSS_SCHEDULER = []
@@ -128,8 +135,10 @@ _C.SOLVER.LR_SCHEDULER = [0.01,0.001,0.001]
 # This is global, so if we have 8 GPUs and IMS_PER_BATCH = 16, each GPU will
 # see 2 images per batch
 _C.TEST = CN()
-# Number of images per batch during test
+# Number of objs per batch during test
 _C.TEST.IMS_PER_BATCH = 32
+_C.TEST.OBJS_PER_BATCH = 1000
+_C.TEST.SAMPLER_LENGTH = 100
 # If test with re-ranking, options: 'yes','no'
 _C.TEST.RE_RANKING = 'no'
 # Path to trained model
