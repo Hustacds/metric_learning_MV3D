@@ -115,14 +115,21 @@ def do_train_val(
         optimizer,
         scheduler,
         loss_fn,
-        num_query,
+        # num_query,
+        expirement_name,
         start_epoch
+
 ):
     log_period = cfg.SOLVER.LOG_PERIOD
     checkpoint_period = cfg.SOLVER.CHECKPOINT_PERIOD
     eval_period = cfg.SOLVER.EVAL_PERIOD
     output_dir = cfg.OUTPUT_DIR
-    device = cfg.MODEL.DEVICE
+
+    if torch.cuda.is_available():
+        device = cfg.MODEL.DEVICE
+    else:
+        device="cpu"
+
     epochs = cfg.SOLVER.MAX_EPOCHS
 
     logger = logging.getLogger("reid_baseline.train")
@@ -130,17 +137,21 @@ def do_train_val(
 
 
     trainer = create_supervised_trainer(model, optimizer, loss_fn, device=device)
+
+    num_query = 10
+
     evaluator = create_supervised_evaluator(model, metrics={'r1_mAP': R1_mAP(num_query, max_rank=50, feat_norm=cfg.TEST.FEAT_NORM)},loss_fn_val=loss_fn, device=device)
-    checkpointer = ModelCheckpoint(output_dir, cfg.MODEL.NAME, checkpoint_period, n_saved=10, require_empty=False)
+    checkpointer = ModelCheckpoint(output_dir, expirement_name, checkpoint_period, n_saved=10, require_empty=False)
     timer = Timer(average=True)
 
     # for old ignite version
     # trainer.add_event_handler(Events.EPOCH_COMPLETED, checkpointer, {'model': model.state_dict(),
     #                                                                  'optimizer': optimizer.state_dict()})
-
     #for new ignite version,  refer to  https://github.com/pytorch/ignite/issues/529
     trainer.add_event_handler(Events.EPOCH_COMPLETED, checkpointer, {'model': model,
                                                                      'optimizer': optimizer})
+
+
     timer.attach(trainer, start=Events.EPOCH_STARTED, resume=Events.ITERATION_STARTED,
                  pause=Events.ITERATION_COMPLETED, step=Events.ITERATION_COMPLETED)
 

@@ -34,6 +34,7 @@ from models.FFM import FFM
 from data.build_dataloader import make_data_loader
 from layers import make_loss
 from solver import make_optimizer, WarmupMultiStepLR
+import torch.optim as optim
 def compare(cfg,logger):
 
     feature_dataset = cfg.DATASETS.FEATURESET_NAMES
@@ -67,10 +68,15 @@ def compare(cfg,logger):
 
                     #构建网络
                     model = FFM(net_type,loss_type,view_num,train_id_nums)
-                    optimizer = make_optimizer(cfg, model)
-                    scheduler = WarmupMultiStepLR(optimizer, cfg.SOLVER.STEPS, cfg.SOLVER.GAMMA,
-                                                  cfg.SOLVER.WARMUP_FACTOR,
-                                                  cfg.SOLVER.WARMUP_ITERS, cfg.SOLVER.WARMUP_METHOD, start_epoch)
+                    # optimizer = make_optimizer(cfg, model)
+                    start_epoch = 0
+                    # scheduler = WarmupMultiStepLR(optimizer, cfg.SOLVER.STEPS, cfg.SOLVER.GAMMA,
+                    #                               cfg.SOLVER.WARMUP_FACTOR,
+                    #                               cfg.SOLVER.WARMUP_ITERS, cfg.SOLVER.WARMUP_METHOD, start_epoch)
+
+                    optimizer = optim.Adam(model.parameters(), lr=1e-3)
+                    scheduler = optim.lr_scheduler.MultiStepLR(optimizer, [20, 30, 40, 50], 0.1)
+
                     #训练评估
 
                     do_train_val(cfg,
@@ -80,7 +86,8 @@ def compare(cfg,logger):
                             optimizer,
                             scheduler,
                             loss_fn,
-                            num_query,
+                            # num_query,
+                            experiment_name,
                             start_epoch
                     )
     return 0
