@@ -14,20 +14,11 @@ class FFM(nn.Module):
         self.loss_type = loss_type
         self.num_view = num_view
         self.class_num = class_num
-        if self.type == 'rnn':
-            self.length_fused_feature = 512
-        elif self.type == 'maxpooling':
-            self.length_fused_feature = 512
-        elif self.type == "averaging":
-            self.length_fused_feature = 512
-        elif self.type == "concatenating":
-            self.length_fused_feature = 512*(num_view)
-        elif self.type == "unfused":
-            self.length_fused_feature = 512
-        elif self.type =='stack':
-            self.length_fused_feature = 512
+        if self.net_type =="concatenating":
+            self.length_fused_feature = 512 * (num_view)
         else:
-            print("================wrong type===================")
+            self.length_fused_feature = 512
+
         self.rnn = torch.nn.LSTM(input_size=512, hidden_size=512, num_layers=2, batch_first=True)
         self.classify = torch.nn.Linear(in_features=self.length_fused_feature, out_features=2)
         self.classify_middle1 = torch.nn.Linear(in_features=self.length_fused_feature, out_features=self.length_fused_feature)

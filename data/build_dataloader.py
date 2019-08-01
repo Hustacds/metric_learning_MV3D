@@ -20,7 +20,7 @@ def make_data_loader(cfg,feature_group,view_num):
     val_feature_path = cfg.DATASETS.ROOT_DIR + feature_group +  '\\fe_test.npz'
     val_set = Feature_Dataset(val_feature_path)
     val_id_nums = val_set.get_id_nums()
-    val_loader = DataLoader(val_id_nums,batch_size=cfg.SOLVER.OBJS_PER_BATCH*view_num,
-                              sampler=RandomMVSampler(val_id_nums, cfg.TEST.OBJS_PER_BATCH, view_num,cfg.TEST.SAMPLER_LENGTH),
+    val_loader = DataLoader(val_set,batch_size=cfg.SOLVER.OBJS_PER_BATCH*view_num,
+                              sampler=RandomMVSampler(val_set, cfg.TEST.OBJS_PER_BATCH, view_num,cfg.TEST.SAMPLER_LENGTH),
                               collate_fn=train_collate_fn)
     return train_loader,val_loader,train_id_nums,val_id_nums
