@@ -28,6 +28,7 @@ _C.MODEL = CN()
 _C.MODEL.DEVICE = "cuda"
 # ID number of GPU
 _C.MODEL.DEVICE_ID = '1'
+
 # Name of backbone
 
 _C.EXPERIMENT = CN()
@@ -112,17 +113,17 @@ _C.SOLVER.WARMUP_ITERS = 500
 _C.SOLVER.WARMUP_METHOD = "linear"
 
 # epoch number of saving checkpoints
-_C.SOLVER.CHECKPOINT_PERIOD = 50
+_C.SOLVER.CHECKPOINT_PERIOD = 10
 # iteration of display training log
 _C.SOLVER.LOG_PERIOD = 100
 # epoch number of validation
-_C.SOLVER.EVAL_PERIOD = 50
+_C.SOLVER.EVAL_PERIOD = 5
 
 # Number of images per batch
 # This is global, so if we have 8 GPUs and IMS_PER_BATCH = 16, each GPU will
 # see 2 images per batch
 _C.SOLVER.IMS_PER_BATCH = 32
-_C.SOLVER.OBJS_PER_BATCH = 1000
+_C.SOLVER.OBJS_PER_BATCH = 10
 _C.SOLVER.SAMPLER_LENGTH = 100
 #loss的组合
 _C.SOLVER.EPOCH_SCHEDULER = []
@@ -137,7 +138,7 @@ _C.SOLVER.LR_SCHEDULER = [0.01,0.001,0.001]
 _C.TEST = CN()
 # Number of objs per batch during test
 _C.TEST.IMS_PER_BATCH = 32
-_C.TEST.OBJS_PER_BATCH = 1000
+_C.TEST.OBJS_PER_BATCH = 10
 _C.TEST.SAMPLER_LENGTH = 100
 # If test with re-ranking, options: 'yes','no'
 _C.TEST.RE_RANKING = 'no'

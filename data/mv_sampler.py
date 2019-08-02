@@ -19,7 +19,7 @@ class RandomMVSampler(Sampler):
     def __init__(self, data_source, batch_size,num_view_to_fuse,length_per_id):
         self.data_source = data_source
         self.batch_size = batch_size
-        self.num_view_sample = num_view_to_fuse
+        self.num_view_sample = num_view_to_fuse+1
         self.length_per_id = length_per_id
 
         self.index_dic = defaultdict(list)

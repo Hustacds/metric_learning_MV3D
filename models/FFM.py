@@ -19,21 +19,33 @@ class FFM(nn.Module):
         else:
             self.length_fused_feature = 512
 
+        #当type为rnn时，需要用到self.rnn
         self.rnn = torch.nn.LSTM(input_size=512, hidden_size=512, num_layers=2, batch_first=True)
-        self.classify = torch.nn.Linear(in_features=self.length_fused_feature, out_features=2)
-        self.classify_middle1 = torch.nn.Linear(in_features=self.length_fused_feature, out_features=self.length_fused_feature)
-        self.classify_middle2 = torch.nn.Linear(in_features=self.length_fused_feature,
-                                             out_features=self.length_fused_feature)
+
+        #当type为stac时，需要用到
+        self.stack_cnn1 = torch.nn.Conv1d(num_view, 10, stride=1, padding=0, kernel_size=1)
+        self.stack_cnn2 = torch.nn.Conv1d(10, 1, stride=1, padding=0, kernel_size=1)
 
 
-        self.classify_cnn1 = torch.nn.Conv1d(num_view,10,stride=1,padding = 0,kernel_size=1)
-        self.classify_cnn2 = torch.nn.Conv1d(10, 1, stride=1, padding=0, kernel_size=1)
+        # 将融合特征映射至新的空间
+        self.fc1_map_ff =   torch.nn.Linear(in_features=self.length_fused_feature, out_features=self.length_fused_feature)
+        self.fc2_map_ff = torch.nn.Linear(in_features=self.length_fused_feature, out_features=self.length_fused_feature)
+
+        #将原始特征映射至新的空间
+        self.fc1_map_f = torch.nn.Linear(in_features=self.length_fused_feature, out_features=self.length_fused_feature)
+        self.fc2_map_f = torch.nn.Linear(in_features=self.length_fused_feature, out_features=self.length_fused_feature)
+
+
 
     # x为require feature , dimension = batch_size * feature_length
     # y为registered features  dimension = batch_size * num_views * feature_length
-    def forward(self,x):
-        output = []
+    def forward(self,ft):
+        x = ft[:,0:-1,:]
         N, M, L = x.size()  # N为batch_size, M为Multi-view数量
+        y=ft[:,-1,:]
+        y = y.view(N,-1,L)
+        output = []
+
         if self.type=="unfused":
             # print('batchsize = {}, 视图数量为 {}, 检索特征长度 = {}'.format(N,M, L))
             fused_feature = x.view(N*M, L)
@@ -59,11 +71,20 @@ class FFM(nn.Module):
 
         elif self.type == 'stack':
             # print('batchsize = {}, 视图数量为 {}, 检索特征长度 = {}'.format(N, M, L))
-            fused_feature = self.classify_cnn1(x)
+            fused_feature = self.stack_cnn1(x)
             # print(fused_feature.shape)
-            fused_feature = self.classify_cnn2(fused_feature)
+            fused_feature = self.stack_cnn2(fused_feature)
             fused_feature = torch.squeeze(fused_feature,1)
             # print(fused_feature.shape)
+
+        fused_feature = self.fc1_map_ff(fused_feature)
+        fused_feature = torch.tanh(fused_feature)
+        fused_feature = self.fc2_map_ff(fused_feature)
+
+        y = self.fc1_map_f(y)
+        y = torch.tanh(y)
+        y = self.fc2_map_ff(y)
+
 
         output.append(fused_feature)
         input = self.classify_middle1(fused_feature)

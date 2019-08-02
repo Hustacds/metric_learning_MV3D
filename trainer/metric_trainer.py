@@ -14,6 +14,8 @@ import random
 from utils.reid_metric import R1_mAP
 import cv2
 import numpy as np
+import os
+from utils.logger import setup_logger
 
 def create_supervised_trainer(model, optimizer, loss_fn,
                               device=None):
@@ -39,20 +41,10 @@ def create_supervised_trainer(model, optimizer, loss_fn,
     def _update(engine, batch):
         model.train()
         optimizer.zero_grad()
-        img, target,imgs_partial,region_label = batch   #target为id
+        fts, target = batch   #target为id
 
-        # img_eg = imgs_partial.cpu().numpy()[0]
-        # img_eg = np.transpose(img_eg, (1, 2, 0))
-        # img_eg = cv2.cvtColor(img_eg, cv2.COLOR_BGR2RGB)
-        # print('trainer 中dataloader 输入的图像尺寸为{}'.format(img_eg.shape))
-        # cv2.imshow('input', img_eg)
-        # cv2.waitKey(1)
-
-        imgs_partial = imgs_partial.to(device) if torch.cuda.device_count() >= 1 else imgs_partial
         target = target.to(device) if torch.cuda.device_count() >= 1 else target
-        region_label = region_label.to(device) if torch.cuda.device_count() >= 1 else region_label
-
-        feature_map, probability_map, visibility_score, feature_region, class_socre = model(imgs_partial)
+        feature_map, probability_map, visibility_score, feature_region, class_socre = model(fts)
         # print(feature_map.shape)
         # print(probability_map.shape)
         # print(visibility_score.shape)
@@ -132,9 +124,12 @@ def do_train_val(
 
     epochs = cfg.SOLVER.MAX_EPOCHS
 
-    logger = logging.getLogger("reid_baseline.train")
-    logger.info("Start training")
+    output_dir = cfg.OUTPUT_DIR +"\\" + expirement_name
+    if output_dir and not os.path.exists(output_dir):
+        os.makedirs(output_dir)
 
+    logger = setup_logger(expirement_name, output_dir, 0)
+    logger.info("Start training")
 
     trainer = create_supervised_trainer(model, optimizer, loss_fn, device=device)
 
