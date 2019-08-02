@@ -83,17 +83,11 @@ class FFM(nn.Module):
 
         y = self.fc1_map_f(y)
         y = torch.tanh(y)
-        y = self.fc2_map_ff(y)
-
+        query_feature = self.fc2_map_ff(y)
 
         output.append(fused_feature)
-        input = self.classify_middle1(fused_feature)
-        input = torch.tanh(input)
-        input = self.classify_middle2(input)
-        input = torch.tanh(input)
-        if self.loss_type=='cosine':
-            input = nn.BatchNorm1d(input)
-        result = self.classify(input)  # N *
+        output.append(query_feature)
+                
         if self.type=="unfused":
             result = result.view(N, M, -1)
             result = torch.max(result, 1)
