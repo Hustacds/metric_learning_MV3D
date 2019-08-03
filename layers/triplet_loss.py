@@ -17,60 +17,48 @@ def normalize(x, axis=-1):
     x = 1. * x / (torch.norm(x, 2, axis, keepdim=True).expand_as(x) + 1e-12)
     return x
 
-def euclidean_dist_vpm(x,region_label):
-    """
-        Args:
-          x: pytorch Variable, with shape [m,,r ,d]
-          y: pytorch Variable, with shape [n, r, d]
-          region_label: 区域标签
-        Returns:
-          dist: pytorch Variable, with shape [m, n]
-    """
-    m,r = x.shape[0],x.shape[1]
-
-    index_mat = torch.arange(0,r).view(-1,1).expand(r,m).view(r,m,1).expand(r,m,m).permute(1,2,0).cuda()
-
-    v_min = torch.min(torch.min(region_label[:, :, :], dim=2)[0], dim=1)[0]
-    v_max = torch.max(torch.max(region_label[:, :, :], dim=2)[0], dim=1)[0]
-
-    v_min = v_min.view(-1,1).expand(m,m)
-    v_min = torch.max(v_min,v_min.t()).view(m,m,1).expand(m,m,r)
-
-    v_max = v_max.view(-1, 1).expand(m, m)
-    v_max = torch.min(v_max, v_max.t()).view(m,m,1).expand(m,m,r)
-
-    r_kernel = torch.mul(index_mat>=v_min,index_mat<=v_max)
-
-
-    dis_mat = torch.Tensor(x.shape[0],x.shape[0],x.shape[1]).cuda()
-    for i in range(x.shape[1]):
-        dis_mat[:,:,i] = euclidean_dist(x[:,i,:], x[:,i,:])
-    dis_mat = torch.mul(dis_mat,r_kernel.float())
-    dist = torch.mean(dis_mat,dim = 2)
-    return dist
-
-def euclidean_dist(x, y):
+def euclid_dist(x, y):
     """
     Args:
-      x: pytorch Variable, with shape [m, d]
-      y: pytorch Variable, with shape [n, d]
+      x: pytorch Variable, with shape [m, w, l], w为特征的宽度
+      y: pytorch Variable, with shape [n, l]
     Returns:
-      dist: pytorch Variable, with shape [m, n]
+      dist: pytorch Variable, with shape [m, w, n]
     """
-    m, n = x.size(0), y.size(0)
-    xx = torch.pow(x, 2).sum(1, keepdim=True).expand(m, n)
-    yy = torch.pow(y, 2).sum(1, keepdim=True).expand(n, m).t()
-    dist = xx + yy
-    dist.addmm_(1, -2, x, y.t())
+    m = x.size(0)
+    w = x.size(1)
+    n = y.size(0)
+    xx = torch.pow(x, 2).sum(2, keepdim=True).expand(m, w, n)
+    yy = torch.pow(y, 2).sum(1, keepdim=True).expand(n, w).view(n,w,-1).expand(n,w,m).permute([2,1,0])
+    dist = xx + yy - 2 *torch.matmul(x,y.t())
     dist = dist.clamp(min=1e-12).sqrt()  # for numerical stability
+    dist = torch.max(dist,dim = 1)[0]
+    return dist
+
+def cosine_dist(x,y):
+    """
+    Args:
+      x: pytorch Variable, with shape [m, w, l], w为特征的宽度
+      y: pytorch Variable, with shape [n, l]
+    Returns:
+      dist: pytorch Variable, with shape [m, w, n]
+    """
+    m = x.size(0)
+    w = x.size(1)
+    n = y.size(0)
+    xx = torch.pow(x, 2).sum(2, keepdim=True).expand(m, w, n)
+    yy = torch.pow(y, 2).sum(1, keepdim=True).expand(n, w).expand(n, w, m).permute([2, 1, 0])
+
+    dist = torch.matmul(x,y.t())/((xx*yy).clamp(min=1e-12).sqrt())
+    # dist = dist.clamp(min=1e-12).sqrt()  # for numerical stability
+    dist = torch.max(dist, dim=1)[0]
     return dist
 
 
-def hard_example_mining(dist_mat, labels, return_inds=False):
+def hard_example_mining(dist_mat):
     """For each anchor, find the hardest positive and negative sample.
     Args:
       dist_mat: pytorch Variable, pair wise distance between samples, shape [N, N]
-      labels: pytorch LongTensor, with shape [N]
       return_inds: whether to return the indices. Save time if `False`(?)
     Returns:
       dist_ap: pytorch Variable, distance(anchor, positive); shape [N]
@@ -86,7 +74,7 @@ def hard_example_mining(dist_mat, labels, return_inds=False):
     assert len(dist_mat.size()) == 2
     assert dist_mat.size(0) == dist_mat.size(1)
     N = dist_mat.size(0)
-
+    labels = torch.arange(0,N,1)
     # shape [N, N]
     is_pos = labels.expand(N, N).eq(labels.expand(N, N).t())
     is_neg = labels.expand(N, N).ne(labels.expand(N, N).t())
@@ -103,21 +91,6 @@ def hard_example_mining(dist_mat, labels, return_inds=False):
     dist_ap = dist_ap.squeeze(1)
     dist_an = dist_an.squeeze(1)
 
-    if return_inds:
-        # shape [N, N]
-        ind = (labels.new().resize_as_(labels)
-               .copy_(torch.arange(0, N).long())
-               .unsqueeze(0).expand(N, N))
-        # shape [N, 1]
-        p_inds = torch.gather(
-            ind[is_pos].contiguous().view(N, -1), 1, relative_p_inds.data)
-        n_inds = torch.gather(
-            ind[is_neg].contiguous().view(N, -1), 1, relative_n_inds.data)
-        # shape [N]
-        p_inds = p_inds.squeeze(1)
-        n_inds = n_inds.squeeze(1)
-        return dist_ap, dist_an, p_inds, n_inds
-
     return dist_ap, dist_an
 
 
@@ -126,80 +99,46 @@ class TripletLoss(object):
     Related Triplet Loss theory can be found in paper 'In Defense of the Triplet
     Loss for Person Re-Identification'."""
 
-    def __init__(self, margin=None):
+    def __init__(self, dist_type, margin=None):
         self.margin = margin
+        if dist_type == 'euclid':
+            self.dist = euclid_dist
+        elif dist_type =='cosine':
+            self.dist = cosine_dist
+        else:
+            print("wrong dist_type")
+
         if margin is not None:
             self.ranking_loss = nn.MarginRankingLoss(margin=margin)
         else:
             self.ranking_loss = nn.SoftMarginLoss()
 
-    def __call__(self, global_feat, labels, normalize_feature=False):
+    # def __call__(self, global_feat, labels, normalize_feature=False):
+    #     if normalize_feature:
+    #         global_feat = normalize(global_feat, axis=-1)
+    #     # dist_mat = euclidean_dist(global_feat, global_feat)
+    #     dist_mat = euclidean_dist(global_feat,global_feat)
+    #     dist_ap, dist_an = hard_example_mining(
+    #         dist_mat, labels)
+    #     y = dist_an.new().resize_as_(dist_an).fill_(1)
+    #     if self.margin is not None:
+    #         loss = self.ranking_loss(dist_an, dist_ap, y)
+    #     else:
+    #         loss = self.ranking_loss(dist_an - dist_ap, y)
+    #     return loss, dist_ap, dist_an
+
+    def __call__(self, ft_fused, ft_query, normalize_feature=False):
         if normalize_feature:
-            global_feat = normalize(global_feat, axis=-1)
-        # dist_mat = euclidean_dist(global_feat, global_feat)
-        dist_mat = euclidean_dist(global_feat,global_feat)
+            ft_fused = normalize(ft_fused, axis = -1)
+            ft_query = normalize(ft_query,axis = -1)
+
+        dist_mat = self.dist(ft_fused,ft_query)
         dist_ap, dist_an = hard_example_mining(
-            dist_mat, labels)
+            dist_mat)
         y = dist_an.new().resize_as_(dist_an).fill_(1)
         if self.margin is not None:
             loss = self.ranking_loss(dist_an, dist_ap, y)
         else:
             loss = self.ranking_loss(dist_an - dist_ap, y)
-        return loss, dist_ap, dist_an
+        return loss, dist_mat
 
-class TripletLoss_VPM(object):
-    """Modified from Tong Xiao's open-reid (https://github.com/Cysu/open-reid).
-    Related Triplet Loss theory can be found in paper 'In Defense of the Triplet
-    Loss for Person Re-Identification'."""
-
-    def __init__(self, margin=None):
-        self.margin = margin
-        if margin is not None:
-            self.ranking_loss = nn.MarginRankingLoss(margin=margin)
-        else:
-            self.ranking_loss = nn.SoftMarginLoss()
-
-    def __call__(self, global_feat, labels,region_label, normalize_feature=False):
-        if normalize_feature:
-            global_feat = normalize(global_feat, axis=-1)
-        dist_mat =euclidean_dist_vpm (global_feat, region_label)
-        dist_ap, dist_an = hard_example_mining(
-            dist_mat, labels)
-        y = dist_an.new().resize_as_(dist_an).fill_(1)
-        if self.margin is not None:
-            loss = self.ranking_loss(dist_an, dist_ap, y)
-        else:
-            loss = self.ranking_loss(dist_an - dist_ap, y)
-        return loss, dist_ap, dist_an
-
-
-class CrossEntropyLabelSmooth(nn.Module):
-    """Cross entropy loss with label smoothing regularizer.
-
-    Reference:
-    Szegedy et al. Rethinking the Inception Architecture for Computer Vision. CVPR 2016.
-    Equation: y = (1 - epsilon) * y + epsilon / K.
-
-    Args:
-        num_classes (int): number of classes.
-        epsilon (float): weight.
-    """
-    def __init__(self, num_classes, epsilon=0.1, use_gpu=True):
-        super(CrossEntropyLabelSmooth, self).__init__()
-        self.num_classes = num_classes
-        self.epsilon = epsilon
-        self.use_gpu = use_gpu
-        self.logsoftmax = nn.LogSoftmax(dim=1)
-
-    def forward(self, inputs, targets):
-        """
-        Args:
-            inputs: prediction matrix (before softmax) with shape (batch_size, num_classes)
-            targets: ground truth labels with shape (num_classes)
-        """
-        log_probs = self.logsoftmax(inputs)
-        targets = torch.zeros(log_probs.size()).scatter_(1, targets.unsqueeze(1).data.cpu(), 1)
-        if self.use_gpu: targets = targets.cuda()
-        targets = (1 - self.epsilon) * targets + self.epsilon / self.num_classes
-        loss = (- targets * log_probs).mean(0).sum()
-        return loss

@@ -14,32 +14,35 @@ from layers import triplet_loss
 
 # 相似度的度量
 class R1_mAP(Metric):
-    def __init__(self, num_query, max_rank=50, feat_norm='yes'):
+    def __init__(self,  max_rank=50, feat_norm='yes'):
         super(R1_mAP, self).__init__()
-        self.num_query = num_query
         self.max_rank = max_rank
         self.feat_norm = feat_norm
+        self.ft_fused = []
+        self.ft_query = []
+        self.target = []
 
     #在每个epoch开始的时候调用
     def reset(self):
-        self.feats = []
-        self.pids = []
-        self.camids = []
-        self.v_score = []
+        self.ft_fused = []
+        self.ft_query = []
+        self.target = []
+
 
     # feat为所有子区域的特征
     # 在每个iteration结束的时候调用
     def update(self, output):
-        feat, pid, camid, visibility_score, _, _, _ = output
-        self.feats.append(feat)
-        self.v_score.append(visibility_score)
-        self.pids.extend(np.asarray(pid))
-        self.camids.extend(np.asarray(camid))
+        batch_ft_fused, batch_ft_query, batch_target, _, _ = output
+        self.ft_fused.append(batch_ft_fused)
+        self.ft_query.append(batch_ft_query)
+        self.target.append(batch_target)
 
     # 在每个epock结束的时候调用
     def compute(self):
         v_score = torch.cat(self.v_score, dim=0)
         feats = torch.cat(self.feats, dim=0)
+
+        
 
         if self.feat_norm == 'yes':
             print("The test feature is normalized")

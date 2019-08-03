@@ -64,7 +64,7 @@ def compare(cfg,logger):
                     # print(experiment_name)
                     logger.info("开始新的训练与测试:{}".format(experiment_name))
 
-                    loss_fn = make_loss(cfg)
+                    loss_fn = make_loss(cfg,loss_type)
 
                     #构建网络
                     model = FFM(net_type,loss_type,view_num,train_id_nums)

@@ -42,25 +42,19 @@ def create_supervised_trainer(model, optimizer, loss_fn,
         model.train()
         optimizer.zero_grad()
         fts, target = batch   #target为id
-
-        target = target.to(device) if torch.cuda.device_count() >= 1 else target
-        feature_map, probability_map, visibility_score, feature_region, class_socre = model(fts)
-        # print(feature_map.shape)
-        # print(probability_map.shape)
-        # print(visibility_score.shape)
-        # print(feature_region.shape)
-        # print(class_socre.shape)
-        loss,score,l_r,l_id,l_tri = loss_fn(feature_map, probability_map, visibility_score, feature_region, class_socre, target, region_label)
+        fts = fts.to(device) if torch.cuda.device_count() >= 1 else fts
+        ft_fused,ft_query = model(fts)
+        loss,dis_mat = loss_fn(ft_fused,ft_query)
         loss.backward()
         optimizer.step()
-        # compute acc
-        acc = (score.max(1)[1] == target).float().mean()
-        return loss.item(), acc.item(),l_r.item(),l_id.item(),l_tri.item()
+        label_in_bath = torch.arange(0,dis_mat.shape[0],1)
+        label_in_bath = label_in_bath.to(device) if torch.cuda.device_count() >= 1 else label_in_bath
+        acc =(dis_mat.min(1)[1] == label_in_bath).float().mean()
+        return loss.item(), acc.item()
 
     return Engine(_update)
 
-#在eval中，只生成feature，而不考虑id判断是否正确了，这是由于测试集中的Id和训练集中的不一样，需要直接去判断。
-def create_supervised_evaluator(model, metrics, loss_fn_val, device=None):
+def create_supervised_evaluator(model, metrics, loss_fn, device=None):
     """
     Factory function for creating an evaluator for supervised models
 
@@ -80,23 +74,21 @@ def create_supervised_evaluator(model, metrics, loss_fn_val, device=None):
     def _inference(engine, batch):
         model.eval()
         with torch.no_grad():
-            img, pids, camids,imgs_partial,region_label = batch
-            imgs_partial = imgs_partial.to(device) if torch.cuda.device_count() >= 1 else imgs_partial
-
-            target = torch.tensor(pids, dtype=torch.int64)
+            fts, target = batch  # target为id
+            fts = fts.to(device) if torch.cuda.device_count() >= 1 else fts
             target = target.to(device) if torch.cuda.device_count() >= 1 else target
-            region_label = region_label.to(device) if torch.cuda.device_count() >= 1 else region_label
-            feature_map, probability_map, visibility_score, feature_region, class_socre = model(imgs_partial)
-            loss,  l_r,  l_tri = loss_fn_val( probability_map, feature_region,
-                                                     target, region_label)
-            # print("evaluator===========",pids)
-            return feature_region, pids, camids,visibility_score, loss.item(), l_r.item(),l_tri.item()
+            ft_fused, ft_query = model(fts)
+
+            loss, dis_mat = loss_fn(ft_fused, ft_query)
+            label_in_bath = torch.arange(0, dis_mat.shape[0], 1)
+            label_in_bath = label_in_bath.to(device) if torch.cuda.device_count() >= 1 else label_in_bath
+            acc = (dis_mat.min(1)[1] == label_in_bath).float().mean()
+            return ft_fused, ft_query,target, loss.item(), acc.item()
 
     engine = Engine(_inference)
 
     for name, metric in metrics.items():
         metric.attach(engine, name)
-
     return engine
 
 def do_train_val(
@@ -107,7 +99,6 @@ def do_train_val(
         optimizer,
         scheduler,
         loss_fn,
-        # num_query,
         expirement_name,
         start_epoch
 
@@ -115,7 +106,6 @@ def do_train_val(
     log_period = cfg.SOLVER.LOG_PERIOD
     checkpoint_period = cfg.SOLVER.CHECKPOINT_PERIOD
     eval_period = cfg.SOLVER.EVAL_PERIOD
-    output_dir = cfg.OUTPUT_DIR
 
     if torch.cuda.is_available():
         device = cfg.MODEL.DEVICE
@@ -133,9 +123,7 @@ def do_train_val(
 
     trainer = create_supervised_trainer(model, optimizer, loss_fn, device=device)
 
-    num_query = 10
-
-    evaluator = create_supervised_evaluator(model, metrics={'r1_mAP': R1_mAP(num_query, max_rank=50, feat_norm=cfg.TEST.FEAT_NORM)},loss_fn_val=loss_fn, device=device)
+    evaluator = create_supervised_evaluator(model, metrics={'r1_mAP': R1_mAP( max_rank=50, feat_norm=cfg.TEST.FEAT_NORM)},loss_fn=loss_fn, device=device)
     checkpointer = ModelCheckpoint(output_dir, expirement_name, checkpoint_period, n_saved=10, require_empty=False)
     timer = Timer(average=True)
 
@@ -155,9 +143,6 @@ def do_train_val(
     # 每个epoch开始时清空buffer，
     RunningAverage(output_transform=lambda x: x[0]).attach(trainer, 'avg_loss')
     RunningAverage(output_transform=lambda x: x[1]).attach(trainer, 'avg_acc')
-    RunningAverage(output_transform=lambda x: x[2]).attach(trainer, 'avg_l_r')
-    RunningAverage(output_transform=lambda x: x[3]).attach(trainer, 'avg_l_id')
-    RunningAverage(output_transform=lambda x: x[4]).attach(trainer, 'avg_l_tri')
 
     RunningAverage(output_transform=lambda x: x[4]).attach(evaluator, 'avg_loss')
     RunningAverage(output_transform=lambda x: x[5]).attach(evaluator, 'avg_l_r')
@@ -177,17 +162,14 @@ def do_train_val(
     @trainer.on(Events.ITERATION_COMPLETED)
     def log_training_loss(engine):
         iter = int(timer.step_count)
-        logger.info("Iteration[{}] Loss: {:.3f}, Acc: {:.3f}, L_r:{:.3f}, L_id:{:.3f}, L_tri:{:.3f}"
+        logger.info("Iteration[{}] Loss: {:.3f}, Acc: {:.3f}"
             .format(iter,
-                    engine.state.output[0], engine.state.output[1],
-                    engine.state.output[2], engine.state.output[3],
-                    engine.state.output[4]))
+                    engine.state.output[0], engine.state.output[1]))
         if iter % log_period == 0:
-            logger.info("Epoch[{}] Iteration[{}] Loss: {:.3f}, Acc: {:.3f}, Base Lr: {:.2e}, L_r:{:.3f}, L_id:{:.3f}, L_tri:{:.3f}"
+            logger.info("Epoch[{}] Iteration[{}] Loss: {:.3f}, Acc: {:.3f}, Base Lr: {:.2e}"
                         .format(engine.state.epoch, iter,
                                 engine.state.metrics['avg_loss'], engine.state.metrics['avg_acc'],
-                                scheduler.get_lr()[0],engine.state.metrics['avg_l_r'], engine.state.metrics['avg_l_id'],
-                                engine.state.metrics['avg_l_tri']))
+                                scheduler.get_lr()[0]))
 
     # adding handlers using `trainer.on` decorator API
     @trainer.on(Events.EPOCH_COMPLETED)
