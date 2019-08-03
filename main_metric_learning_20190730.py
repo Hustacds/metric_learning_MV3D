@@ -32,7 +32,7 @@ from utils.logger import setup_logger
 from trainer.metric_trainer import do_train_val
 from models.FFM import FFM
 from data.build_dataloader import make_data_loader
-from layers import make_loss
+
 from solver import make_optimizer, WarmupMultiStepLR
 import torch.optim as optim
 def compare(cfg,logger):
@@ -64,10 +64,10 @@ def compare(cfg,logger):
                     # print(experiment_name)
                     logger.info("开始新的训练与测试:{}".format(experiment_name))
 
-                    loss_fn = make_loss(cfg,loss_type)
+
 
                     #构建网络
-                    model = FFM(net_type,loss_type,view_num,train_id_nums)
+                    model = FFM(net_type,loss_type,view_num)
                     # optimizer = make_optimizer(cfg, model)
                     start_epoch = 0
                     # scheduler = WarmupMultiStepLR(optimizer, cfg.SOLVER.STEPS, cfg.SOLVER.GAMMA,
@@ -85,10 +85,10 @@ def compare(cfg,logger):
                             val_loader,
                             optimizer,
                             scheduler,
-                            loss_fn,
-                            # num_query,
+                            loss_type,
                             experiment_name,
-                            start_epoch
+                            start_epoch,
+                            view_num
                     )
     return 0
 

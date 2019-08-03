@@ -8,13 +8,12 @@ import torch.nn as nn
 from torch.autograd import Variable
 #特征聚合网络的定义
 class FFM(nn.Module):
-    def __init__(self,net_type,loss_type,num_view,class_num):
+    def __init__(self,net_type,loss_type,num_view):
         super(FFM,self).__init__()
         self.length_feature = 512
         self.net_type = net_type
         self.loss_type = loss_type
         self.num_view = num_view
-        self.class_num = class_num
         if self.net_type =="concatenating":
             self.length_fused_feature = self.length_feature * (num_view)
         else:

@@ -16,8 +16,8 @@ import cv2
 import numpy as np
 import os
 from utils.logger import setup_logger
-
-def create_supervised_trainer(model, optimizer, loss_fn,
+from layers import make_loss
+def create_supervised_trainer(model, optimizer, loss_fn,view_num,
                               device=None):
     """
     Factory function for creating a trainer for supervised models
@@ -54,7 +54,7 @@ def create_supervised_trainer(model, optimizer, loss_fn,
 
     return Engine(_update)
 
-def create_supervised_evaluator(model, metrics, loss_fn, device=None):
+def create_supervised_evaluator(model, metrics, loss_fn, view_num,device=None):
     """
     Factory function for creating an evaluator for supervised models
 
@@ -76,14 +76,14 @@ def create_supervised_evaluator(model, metrics, loss_fn, device=None):
         with torch.no_grad():
             fts, target = batch  # target为id
             fts = fts.to(device) if torch.cuda.device_count() >= 1 else fts
-            target = target.to(device) if torch.cuda.device_count() >= 1 else target
+            target = target[::view_num+1].to(device) if torch.cuda.device_count() >= 1 else target[::view_num+1]
             ft_fused, ft_query = model(fts)
 
             loss, dis_mat = loss_fn(ft_fused, ft_query)
             label_in_bath = torch.arange(0, dis_mat.shape[0], 1)
             label_in_bath = label_in_bath.to(device) if torch.cuda.device_count() >= 1 else label_in_bath
             acc = (dis_mat.min(1)[1] == label_in_bath).float().mean()
-            return ft_fused, ft_query,target, loss.item(), acc.item()
+            return ft_fused, ft_query, target, loss.item(), acc.item()
 
     engine = Engine(_inference)
 
@@ -98,11 +98,13 @@ def do_train_val(
         val_loader,
         optimizer,
         scheduler,
-        loss_fn,
+        loss_type,
         expirement_name,
-        start_epoch
+        start_epoch,
+        view_num
 
 ):
+    loss_fn = make_loss(cfg, loss_type)
     log_period = cfg.SOLVER.LOG_PERIOD
     checkpoint_period = cfg.SOLVER.CHECKPOINT_PERIOD
     eval_period = cfg.SOLVER.EVAL_PERIOD
@@ -121,9 +123,9 @@ def do_train_val(
     logger = setup_logger(expirement_name, output_dir, 0)
     logger.info("Start training")
 
-    trainer = create_supervised_trainer(model, optimizer, loss_fn, device=device)
+    trainer = create_supervised_trainer(model, optimizer, loss_fn,view_num=view_num, device=device)
 
-    evaluator = create_supervised_evaluator(model, metrics={'r1_mAP': R1_mAP( max_rank=50, feat_norm=cfg.TEST.FEAT_NORM)},loss_fn=loss_fn, device=device)
+    evaluator = create_supervised_evaluator(model, metrics={'r1_mAP': R1_mAP( loss_type=loss_type, max_rank=50, feat_norm=cfg.TEST.FEAT_NORM)},loss_fn=loss_fn, view_num=view_num,device=device)
     checkpointer = ModelCheckpoint(output_dir, expirement_name, checkpoint_period, n_saved=10, require_empty=False)
     timer = Timer(average=True)
 
@@ -144,9 +146,8 @@ def do_train_val(
     RunningAverage(output_transform=lambda x: x[0]).attach(trainer, 'avg_loss')
     RunningAverage(output_transform=lambda x: x[1]).attach(trainer, 'avg_acc')
 
-    RunningAverage(output_transform=lambda x: x[4]).attach(evaluator, 'avg_loss')
-    RunningAverage(output_transform=lambda x: x[5]).attach(evaluator, 'avg_l_r')
-    RunningAverage(output_transform=lambda x: x[6]).attach(evaluator, 'avg_l_tri')
+    RunningAverage(output_transform=lambda x: x[3]).attach(evaluator, 'avg_loss')
+    RunningAverage(output_transform=lambda x: x[4]).attach(evaluator, 'avg_acc')
 
     @trainer.on(Events.STARTED)
     def start_training(engine):
@@ -187,26 +188,18 @@ def do_train_val(
         if engine.state.epoch % eval_period == 0:
         # if True:
             evaluator.run(val_loader)    #只执行一个epock
-            # cmc, mAP = evaluator.state.metrics['r1_mAP']
-            # logger.info("Validation Results - Epoch: {}".format(engine.state.epoch))
-            # logger.info("mAP: {:.1%}".format(mAP))
-            # for r in [1, 5, 10]:
-                # logger.info("CMC curve, Rank-{:<3}:{:.1%}".format(r, cmc[r - 1]))
+            cmc, mAP = evaluator.state.metrics['r1_mAP']
+            logger.info("Validation Results - Epoch: {}".format(engine.state.epoch))
+            logger.info("mAP: {:.1%}".format(mAP))
+            for r in [1, 5, 10]:
+                logger.info("CMC curve, Rank-{:<3}:{:.1%}".format(r, cmc[r - 1]))
 
     @evaluator.on(Events.ITERATION_COMPLETED)
     def log_compare_loss(engine):
         iter = engine.state.iteration
-        logger.info("Evaluator----- Iteration[{}] Loss: {:.3f},  L_r:{:.3f},  L_tri:{:.3f}"
-                    .format(iter,
-                            engine.state.output[4], engine.state.output[5],
-                            engine.state.output[6]))
         if iter % log_period == 0:
-            logger.info(
-                "Evaluator---- Epoch[{}] Iteration[{}] Loss: {:.3f}, Base Lr: {:.2e}, L_r:{:.3f}, L_tri:{:.3f}"
-                .format(engine.state.epoch, iter,
-                        engine.state.metrics['avg_loss'],
-                        scheduler.get_lr()[0], engine.state.metrics['avg_l_r'],
-                        engine.state.metrics['avg_l_tri']))
+            logger.info("Evaluator----- Iteration[{}] Loss: {:.3f}, Acc: {:.3f}"
+                        .format(iter, engine.state.output[3], engine.state.output[4]))
 
     # print('开始进行评价')
     # evaluator.run(val_loader)  # 只执行一个epock
